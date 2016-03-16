@@ -1,0 +1,10 @@
+role_name,role_id,lexicon_class,use_case_1,use_case_2
+Accountant,37,Accountant,T,T
+AssetManager,29,AssetManager,T,T
+BankTeller,222,BankTeller,T,T
+Economist,23,Economist,T,T
+LoanOfficer,215,LoanOfficer,T,T
+PrivateEquityProf,213,PrivateEquityProf,T,T
+Treasurer,58,Treasurer,T,T
+Underwriter,59,Underwriter,T,T
+VentureCapitalProf,214,VentureCapitalProf,T,T

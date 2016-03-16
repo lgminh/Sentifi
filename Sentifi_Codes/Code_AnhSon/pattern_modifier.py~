@@ -1,0 +1,316 @@
+__author__ = 'diepdt'
+from os import listdir
+from os.path import isfile, join
+import json
+from datetime import datetime
+from distutils.dir_util import copy_tree
+import re
+from collections import OrderedDict
+
+from psycopg2 import connect
+from psycopg2.extras import RealDictCursor, Json
+
+
+ROOT_FOLDER = '/home/semantic/projects/sentifi/semantic/scripts/public'
+
+today = datetime.now()
+JSON_FOLDER = join(ROOT_FOLDER, 'taxonomy')
+JSON_FOLDER_NEW = join(ROOT_FOLDER, 'taxonomy_%s' % today.strftime('%Y%m%d'))
+
+# PG_HOST = 'dev.ssh.sentifi.com'
+# PG_DB = 'sentifi_dev_quang'
+# PG_USER = 'dbo'
+# PG_PASS = 'sentifi'
+# PG_PORT = '5432'
+
+PG_HOST = 'psql-dev-1.ireland.sentifi.internal'
+PG_DB = 'da0_dev'
+PG_USER = 'dbw'
+PG_PASS = 'sentifi'
+PG_PORT = '5432'
+
+
+# get postgresql connection
+def get_pg_connection():
+    print 'Connecting to PosgreSQL at %s:%s' % (PG_HOST, PG_PORT)
+    return connect(database=PG_DB, user=PG_USER, password=PG_PASS, host=PG_HOST, port=PG_PORT)
+
+
+# modify fe files
+def modify_fe_files():
+    # copy backup folder
+    copy_tree(JSON_FOLDER, JSON_FOLDER_NEW)
+    # modify fe files
+    files = [f for f in listdir(JSON_FOLDER_NEW) if isfile(join(JSON_FOLDER_NEW, f))]
+    for json_file in files:
+        if re.match('(.)*fe\.json', json_file):
+            with open(join(JSON_FOLDER_NEW, json_file), 'r+') as data_file:
+                # modified json data
+                data = json.load(data_file)
+                # inclusions
+                events = data['events']
+
+                new_events = []
+                count = 0
+                eventMap = dict()
+                for event in events:
+                    # print 'oldevent', event
+                    if '_DE' in event['issue'] or '_EN' in event['issue']:
+                        new_event = modify_event(event)
+                        print 'newevent', new_event
+                        new_events.append(new_event)
+                        if new_event['info']['id'] in eventMap:
+                            eventMap[new_event['info']['id']] = eventMap[new_event['info']['id']] + [count]
+                        else:
+                            eventMap[new_event['info']['id']] = [count]
+                        # print 'id', new_event['info']['id'], 'map', eventMap[new_event['info']['id']]
+                        count = count + 1
+
+                final_events = []
+                for k,v in eventMap.items():
+                    event = dict()
+                    if len(v) > 1:
+                        event1 = new_events[v[0]]
+                        event2 = new_events[v[1]]
+                        event['info'] = event1['info']
+                        event['instances'] = event1['instances'] + event2['instances']
+                        final_events.append(event)
+                    else:
+                        final_events.append(new_events[v[0]])
+                    print 'finalevent', event
+
+                new_data = OrderedDict([('events', final_events)])
+                # write modified data to file
+                data_file.seek(0)
+                json.dump(new_data, data_file, indent=2, sort_keys=False, separators=(',', ': '))
+                data_file.truncate()
+                data_file.close()
+
+def modify_event(event):
+    new_event = dict()
+    info = dict()
+    inst = dict()
+    # de_inst = dict()
+    if '_EN' in event['issue']:
+        info['id'] = event['issue'].replace('_EN', '')
+        inst['lang'] = "EN"
+    else:
+        info['id'] = event['issue'].replace('_DE', '')
+        inst['lang'] = "DE"
+    if 'name' in event:
+        info['name'] = event['name']
+    if 'ruleName' in event:
+        info['ruleName'] = event['ruleName']
+    if 'parent' in event:
+        info['parent'] = event['parent']
+    if 'active' in event:
+        info['active'] = event['active']
+    if 'createdAt' in event:
+        info['createdAt'] = event['createdAt']
+
+    if 'description' in event:
+        inst['description'] = event['description']
+    if 'updatedAt' in event:
+        inst['updatedAt'] = event['updatedAt']
+    if 'appliedAt' in event:
+        inst['appliedAt'] = event['appliedAt']
+    if 'deniedAt' in event:
+        inst['deniedAt'] = event['deniedAt']
+
+    instances=[inst]
+    new_event['info'] = info
+    new_event['instances'] = instances
+    return new_event
+
+def modify_user_files():
+    # copy backup folder
+    copy_tree(JSON_FOLDER, JSON_FOLDER_NEW)
+    # modify pattern files
+    files = [f for f in listdir(JSON_FOLDER_NEW) if isfile(join(JSON_FOLDER_NEW, f))]
+    for json_file in files:
+        if re.match('(.)*\.json', json_file):
+            with open(join(JSON_FOLDER_NEW, json_file), 'r+') as data_file:
+                # modified json data
+                data = json.load(data_file)
+                # inclusions
+                issues = data['issues']
+                new_issues = []
+                for issue in issues:
+                    new_issues.append(issue.replace('_EN', '').replace('_DE', ''))
+                
+                del data['issues']
+                data['events'] = new_issues
+                # write modified data to file
+                data_file.seek(0)
+                json.dump(data, data_file, indent=2, sort_keys=False, separators=(',', ': '))
+                data_file.truncate()
+                data_file.close()
+
+# modify pattern files
+def modify_pattern_files():
+    # copy backup folder
+    copy_tree(JSON_FOLDER, JSON_FOLDER_NEW)
+    # modify pattern files
+    files = [f for f in listdir(JSON_FOLDER_NEW) if isfile(join(JSON_FOLDER_NEW, f))]
+    for json_file in files:
+        if re.match('(.)*_patterns\.json', json_file):
+            with open(join(JSON_FOLDER_NEW, json_file), 'r+') as data_file:
+                # modified json data
+                data = json.load(data_file)
+                # inclusions
+                inclusions = data['inclusion']
+                new_inclusions = []
+                for inc in inclusions:
+                    new_inclusions.append(replace_value(inc))
+                # exclusions
+                exclusions = data['exclusion']
+                new_exclusions = exclusions
+                # new_exclusions = []
+                # for exc in exclusions:
+                #     new_exclusions.append(replace_value(exc))
+                new_data = OrderedDict([('inclusion', new_inclusions), ('exclusion', new_exclusions)])
+                # write modified data to file
+                data_file.seek(0)
+                json.dump(new_data, data_file, indent=2, sort_keys=False, separators=(',', ': '))
+                data_file.truncate()
+                data_file.close()
+
+
+# modify lang db
+def modify_lang_db():
+    pg_conn = get_pg_connection()
+    pg_cur = pg_conn.cursor(cursor_factory=RealDictCursor)
+    rows = find_id(pg_cur)
+    for row in rows:
+        print row
+        pattern_id = row['pattern_id']
+    # pattern_id = 100
+        rules = find_rules_by_id(pattern_id, pg_cur)
+        # print rules
+        if rules is None:
+            continue
+        # modified rules
+        rule = rules['rule']
+        rule_de = rules['rule_de']
+        if rule is not None:
+            rule = modify_rule_lang(rule)
+            if update_rule_to_db(pattern_id, rule, pg_conn) > 0:
+                print 'Update rule for pattern id %s' % pattern_id, rule
+        if rule_de is not None:
+            # rule_de = modify_rule(rule_de)
+            rule_de = modify_rule_lang(rule_de)
+            if update_rule_de_to_db(pattern_id, rule_de, pg_conn) > 0:
+                print 'Update rule_de for pattern id %s' % pattern_id, rule
+
+    pg_cur.close()
+    pg_conn.commit()
+    print 'Update all rule successfully!'
+    pg_conn.close()
+
+def modify_rule_lang(rule):
+    if 'id' in rule:
+        id = rule['id']
+        if '_EN' in rule['id']:
+            rule['id']=rule['id'].replace('_EN', '')
+            rule['lang']='EN'
+        elif '_DE' in rule['id']:
+            rule['id']=rule['id'].replace('_DE', '')
+            rule['lang']='DE'
+    return rule
+
+# modify pattern db
+def modify_pattern_db():
+    # files = [f for f in listdir(JSON_FOLDER_NEW) if isfile(join(JSON_FOLDER_NEW, f))]
+    pg_conn = get_pg_connection()
+    pg_cur = pg_conn.cursor(cursor_factory=RealDictCursor)
+    rows = find_id(pg_cur)
+    for row in rows:
+        print row
+        pattern_id = row['pattern_id']
+        rules = find_rules_by_id(pattern_id, pg_cur)
+        print rules
+        if rules is None:
+            continue
+        # modified rules
+        rule = rules['rule']
+        rule_de = rules['rule_de']
+        if rule is not None:
+            # rule = modify_rule(rule)
+            rule = modify_rule_dictionaries(rule)
+            if update_rule_to_db(pattern_id, rule, pg_conn) > 0:
+                print 'Update rule for pattern id %s' % pattern_id, rule
+        if rule_de is not None:
+            # rule_de = modify_rule(rule_de)
+            rule_de = modify_rule_dictionaries(rule_de)
+            if update_rule_de_to_db(pattern_id, rule_de, pg_conn) > 0:
+                print 'Update rule_de for pattern id %s' % pattern_id, rule
+
+    pg_cur.close()
+    pg_conn.commit()
+    print 'Update all rule successfully!'
+    pg_conn.close()
+
+def modify_rule_dictionaries(rule):
+    if 'dictionaries' in rule:
+        dictionaries = rule['dictionaries']
+        for idx, dictionary in enumerate(dictionaries):
+            if 'is_not' in dictionary:
+                dictionary['isNot']=dictionary['is_not']
+                del dictionary['is_not']
+            dictionaries[idx] = dictionary
+        rule['dictionaries'] = dictionaries
+    return rule
+
+def modify_rule(rule):
+    if 'patterns' in rule:
+        patterns = rule['patterns']
+        for idx, pattern in enumerate(patterns):
+            pattern = replace_value(pattern)
+            patterns[idx] = pattern
+        rule['patterns'] = patterns
+    if 'type' in rule:
+        del rule['type']
+
+    return rule
+
+# find rules by id
+def find_rules_by_id(pattern_id, pg_cur):
+    pg_cur.execute('''SELECT rule, rule_de FROM pattern WHERE pattern_id = %s;''', (pattern_id,))
+    return pg_cur.fetchone()
+
+# find all id
+def find_id(pg_cur):
+    pg_cur.execute('''SELECT pattern_id FROM pattern ''')
+    return pg_cur.fetchall()
+
+
+# update rule to db
+def update_rule_to_db(pattern_id, rule, pg_conn):
+    pg_cur = pg_conn.cursor()
+    pg_cur.execute('''UPDATE pattern SET rule = %s WHERE pattern_id = %s''', (Json(rule), pattern_id))
+    return pg_cur.rowcount
+
+
+# update rule_de to db
+def update_rule_de_to_db(pattern_id, rule_de, pg_conn):
+    pg_cur = pg_conn.cursor()
+    pg_cur.execute('''UPDATE pattern SET rule_de = %s WHERE pattern_id = %s''', (Json(rule_de), pattern_id))
+    return pg_cur.rowcount
+
+
+# replace E -> ${Organization}
+def replace_value(val):
+    print '**************', val, '*******************'
+    val = re.sub(r'\bE\b', '${Organization}', val)
+    val_dict = dict()
+    val_dict["pattern"] = val
+    val_dict["channels"] = ["twitter", "blog", "news" ]
+    return val_dict
+
+# main program
+if __name__ == '__main__':
+    # modify_pattern_files()
+    # modify_pattern_db()
+    modify_fe_files()
+    # modify_lang_db()
+    # modify_user_files()
